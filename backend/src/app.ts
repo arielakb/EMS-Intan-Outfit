@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import path from 'path';
 import { env } from './config/env';
 import { errorHandler } from './shared/errors/error.handler';
 
@@ -28,25 +27,127 @@ import settingsRoutes from './modules/settings/settings.routes';
 
 const app = express();
 
-// Security
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({
-  origin: env.FRONTEND_URL,
-  credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// Disable Express fingerprinting
+app.disable('x-powered-by');
 
-// Rate limiting for auth
-app.use('/api/v1/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { success: false, message: 'Terlalu banyak percobaan login' } }));
-app.use('/api/v1/auth/forgot-password', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { success: false, message: 'Terlalu banyak permintaan reset password' } }));
+// Trust reverse proxy if behind one (Nginx, Traefik, Railway, etc.)
+if (env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
 
-// Body parsing
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+// 🛡️ Enhanced HTTP Security Headers via Helmet
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'", env.FRONTEND_URL],
+        fontSrc: ["'self'", 'https:', 'data:'],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    frameguard: { action: 'deny' },
+    noSniff: true,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    hsts:
+      env.NODE_ENV === 'production'
+        ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+        : false,
+  })
+);
+
+// 🛡️ Strict Cross-Origin Resource Sharing (CORS)
+app.use(
+  cors({
+    origin: (requestOrigin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, server-to-server, curl)
+      if (!requestOrigin) return callback(null, true);
+      // In development allow localhost variations
+      if (env.NODE_ENV !== 'production') {
+        const allowedDev = [env.FRONTEND_URL, 'http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'];
+        if (allowedDev.includes(requestOrigin)) return callback(null, true);
+      }
+      if (requestOrigin === env.FRONTEND_URL) return callback(null, true);
+      callback(new Error('Origin tidak diizinkan oleh kebijakan CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+  })
+);
+
+// 🛡️ Rate Limiting Strategies
+// 1. General API Limiter: prevents volumetric DDoS and aggressive scraping
+const globalApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 menit
+  max: 500, // maks 500 request / 15 menit per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Terlalu banyak permintaan dari IP ini. Silakan coba lagi beberapa saat.' },
+  skip: () => env.NODE_ENV === 'test',
+});
+
+// 2. Strict Auth Limiter: protects against automated dictionary and brute-force attacks
+// Set to 30 attempts / 15 min to accommodate multiple store employees on the same Wi-Fi network
+const strictAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 menit
+  max: 30, // maks 30 percobaan per 15 menit
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Terlalu banyak percobaan autentikasi. Silakan tunggu 15 menit sebelum mencoba kembali.' },
+  skip: () => env.NODE_ENV === 'test',
+});
+
+// 3. Password Recovery Limiter: prevents mass email spamming / enumeration
+const passwordRecoveryLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 jam
+  max: 5, // maks 5 permintaan per jam
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Terlalu banyak permintaan reset password. Silakan coba lagi setelah 1 jam.' },
+});
+
+// 4. File Upload Limiter: prevents storage exhaustion
+const fileUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30, // maks 30 upload per 15 menit
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Batas unggah tercapai. Silakan coba lagi beberapa saat.' },
+});
+
+// 🛡️ Anti-Caching for Sensitive Financial & Personal Data
+app.use('/api/v1', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
+
+// 🛡️ Payload size limiting (mitigate Buffer Overflow / Memory Exhaustion)
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 const API = '/api/v1';
 
+// Apply Rate Limiters
+app.use(API, globalApiLimiter);
+app.use(`${API}/auth/login`, strictAuthLimiter);
+app.use(`${API}/auth/forgot-password`, passwordRecoveryLimiter);
+app.use(`${API}/auth/reset-password`, strictAuthLimiter);
+app.use(`${API}/auth/activate`, strictAuthLimiter);
+app.use(`${API}/auth/change-password`, strictAuthLimiter);
+app.use(`${API}/attendances/check-in`, fileUploadLimiter);
+
+// Application API Routes
 app.use(`${API}/auth`, authRoutes);
 app.use(`${API}/employees`, employeeRoutes);
 app.use(`${API}/schedules`, scheduleRoutes);
@@ -67,4 +168,3 @@ app.use((_req, res) => res.status(404).json({ success: false, message: 'Endpoint
 app.use(errorHandler);
 
 export default app;
-

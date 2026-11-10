@@ -1,6 +1,7 @@
 import prisma from '../../shared/database/prisma';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { env } from '../../config/env';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../../shared/utils/jwt.utils';
 import { AppError, UnauthorizedError, NotFoundError } from '../../shared/errors/AppError';
 import { AuthTokenPurpose, UserStatus } from '@prisma/client';
@@ -121,8 +122,10 @@ export class AuthService {
       },
     });
 
-    // TODO: Send actual email
-    console.log(`[EMAIL] Activation link: ${process.env.FRONTEND_URL}/activate?token=${rawToken}`);
+    // Only log token links in development environment for debugging purposes
+    if (env.NODE_ENV !== 'production') {
+      console.log(`[DEV ONLY] Activation link: ${env.FRONTEND_URL}/activate?token=${rawToken}`);
+    }
     
     return rawToken;
   }
@@ -199,8 +202,10 @@ export class AuthService {
       },
     });
 
-    // TODO: Send actual email
-    console.log(`[EMAIL] Reset link: ${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`);
+    // Only log reset link in development environment
+    if (env.NODE_ENV !== 'production') {
+      console.log(`[DEV ONLY] Reset link: ${env.FRONTEND_URL}/reset-password?token=${rawToken}`);
+    }
 
     return { message: 'Jika email terdaftar, instruksi reset password akan dikirimkan' };
   }

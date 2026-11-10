@@ -44,6 +44,12 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 // PATCH submit (employee) - change DRAFT → SUBMITTED
 router.patch('/:id/submit', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const existing = await salesService.findById(req.params.id as string);
+    // Access control: only owner or the submitting employee can submit this report
+    if (req.user!.role !== 'OWNER' && existing.submittedByEmployeeId !== req.user!.employeeId) {
+      res.status(403).json({ success: false, message: 'Anda tidak memiliki hak untuk mengirim laporan ini' });
+      return;
+    }
     const result = await salesService.submit(req.params.id as string, req.user!.id);
     res.json({ success: true, message: 'Laporan berhasil dikirim untuk verifikasi', data: result });
   } catch (e) { next(e); }
@@ -72,6 +78,11 @@ router.patch('/:id/review', requireOwner, async (req: Request, res: Response, ne
 router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await salesService.findById(req.params.id as string);
+    // Access control: owner can see all; employee can only see their own
+    if (req.user!.role !== 'OWNER' && result.submittedByEmployeeId !== req.user!.employeeId) {
+      res.status(403).json({ success: false, message: 'Akses ditolak' });
+      return;
+    }
     res.json({ success: true, data: result });
   } catch (e) { next(e); }
 });
