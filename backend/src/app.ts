@@ -95,10 +95,10 @@ const globalApiLimiter = rateLimit({
 });
 
 // 2. Strict Auth Limiter: protects against automated dictionary and brute-force attacks
-// Set to 30 attempts / 15 min to accommodate multiple store employees on the same Wi-Fi network
+// In production: strict 30 attempts per 15 min. In development: 500 attempts so testing suites run smoothly.
 const strictAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 menit
-  max: 30, // maks 30 percobaan per 15 menit
+  max: env.NODE_ENV === 'production' ? 30 : 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Terlalu banyak percobaan autentikasi. Silakan tunggu 15 menit sebelum mencoba kembali.' },

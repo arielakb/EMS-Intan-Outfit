@@ -138,8 +138,10 @@ export class AttendanceService {
     });
   }
 
-  async findAll(query: { date?: string; employeeId?: string; page?: number; limit?: number; month?: string }) {
-    const { date, employeeId, page = 1, limit = 20, month } = query;
+  async findAll(query: { date?: string; employeeId?: string; page?: number; limit?: number; pageSize?: number; month?: string }) {
+    const page = Number(query.page || 1);
+    const limit = Number(query.limit || query.pageSize || 20);
+    const { date, employeeId, month } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
